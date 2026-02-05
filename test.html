@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Synthesia / Piano-roll Video → MIDI (client-side)</title>
+<style>
+  :root{--bg:#0f1724;--panel:#0b1220;--muted:#9fb0d9;--glass:rgba(255,255,255,.03)}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,#071028 0%,#071432 100%);color:#eaf0ff}
+  .app{max-width:1100px;margin:28px auto;padding:20px}
+  h1{margin:0 0 6px;font-size:20px}
+  p.lead{margin:0 0 18px;color:var(--muted)}
+  .row{display:flex;gap:16px}
+  .col{background:linear-gradient(180deg,var(--panel),#081224);padding:14px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.6)}
+  .left{flex:1;min-width:420px}
+  .right{width:360px}
+  label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+  input[type=file]{color:transparent}
+  input,select,button{width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.06);background:var(--glass);color:inherit}
+  button.primary{background:linear-gradient(90deg,#6ea8fe,#9d78ff);border:none;color:#06102a;font-weight:700}
+  .canvas-wrap{position:relative;overflow:hidden;border-radius:10px;border:1px solid rgba(255,255,255,.04);background:#000}
+  video#videoEl{width:100%;height:auto;display:block}
+  /* draggable overlay */
+  .overlay{position:absolute;left:10%;right:10%;bottom:6%;height:22%;border:2px dashed rgba(255,255,255,.12);background:rgba(255,255,255,.02);cursor:move;display:flex;align-items:center;justify-content:center}
+  .overlay .hint{font-size:13px;color:var(--muted);padding:6px}
+  .controls-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .small{font-size:13px;padding:6px}
+  .keymap{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .progress{height:10px;background:rgba(255,255,255,.04);border-radius:6px;overflow:hidden}
+  .progress > i{display:block;height:100%;width:0;background:linear-gradient(90deg,#6ea8fe,#9d78ff)}
+  textarea{width:100%;min-height:100px;border-radius:8px;padding:10px;background:rgba(0,0,0,.3);resize:vertical}
+  footer{margin-top:12px;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+  <div class="app">
+    <h1>Video → MIDI (Synthesia / Piano-roll style)</h1>
+    <p class="lead">Upload an MP4 of a Synthesia-style piano roll. Place & resize the overlay so each piano key lines up with the on-screen keys. Then slice keys, set detection options and run analysis. Everything runs client-side in your browser.</p>
+
+    <div class="row">
+      <div class="col left">
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <label style="flex:1">
+            <div style="font-size:13px;color:var(--muted);margin-bottom:6px">Choose MP4 file</div>
+            <input id="fileInput" type="file" accept="video/*" />
+          </label>
+          <div style="width:160px">
+            <div style="font-size:13px;color:var(--muted);margin-bottom:6px">Playback FPS (sample)</div>
+            <input id="sampleFps" type="number" value="25" min="1" max="60" />
+          </div>
+        </div>
+
+        <div class="canvas-wrap" id="canvasWrap">
+          <video id="videoEl" controls crossorigin="anonymous"></video>
+          <!-- draggable overlay to align with keys -->
+          <div class="overlay" id="overlay">
+            <div class="hint">Drag/resize this overlay to align with the on-screen piano keys. Use the controls to slice into keys.</div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+          <button id="playBtn" class="small">Play / Pause</button>
+          <button id="startAnalysis" class="primary small">Start Analysis</button>
+          <button id="stopAnalysis" class="small">Stop</button>
+        </div>
+
+        <div style="margin-top:10px">
+          <label>Detected events (log)</label>
+          <textarea id="log" readonly></textarea>
+        </div>
+
+      </div>
+
+      <div class="col right">
+        <label>Overlay controls</label>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <button id="fitWidth" class="small">Fit Width</button>
+          <button id="centerHoriz" class="small">Center</button>
+        </div>
+
+        <label>Keys setup</label>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <input id="numKeys" type="number" value="25" min="1" />
+          <input id="baseMidi" type="number" value="36" min="0" max="127" title="MIDI number of left-most key" />
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <button id="sliceKeys" class="small">Slice Overlay into Keys</button>
+          <button id="clearKeys" class="small">Clear Key Map</button>
+        </div>
+
+        <label>Detection</label>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <input id="sampleSize" type="number" value="5" min="1" title="square sample size (px)" />
+          <input id="threshold" type="number" value="30" min="1" max="255" title="delta brightness threshold" />
+        </div>
+
+        <label>Timing / MIDI</label>
+        <div class="controls-grid">
+          <div>
+            <label>BPM</label>
+            <input id="bpm" type="number" value="120" min="20" max="300" />
+          </div>
+          <div>
+            <label>PPQ</label>
+            <input id="ppq" type="number" value="480" min="24" max="960" />
+          </div>
+        </div>
+
+        <div style="margin-top:12px">
+          <button id="downloadMidi" class="primary small">Download MIDI (after run)</button>
+        </div>
+
+        <div style="margin-top:12px">
+          <label>Progress</label>
+          <div class="progress"><i id="progressBar"></i></div>
+        </div>
+
+        <div style="margin-top:12px">
+          <label>Key map preview</label>
+          <div id="keyPreview" class="keymap"></div>
+        </div>
+
+        <footer>Notes: works best when synthesia highlights notes in a high-contrast color. Detection is basic — you can tune sample size and threshold.</footer>
+      </div>
+    </div>
+  </div>
+
+<script>
+// Helper: simple element getter
+const $ = id => document.getElementById(id);
+
+const video = $('videoEl');
+const fileInput = $('fileInput');
+const overlay = $('overlay');
+const canvasWrap = $('canvasWrap');
+const logEl = $('log');
+const keyPreview = $('keyPreview');
+
+let keyRects = []; // {left,top,width,height,midi}
+let analyzing = false;
+let events = []; // {time, type:'on'|'off', midi}
+
+// --- Overlay: drag & resize ---
+let drag = {active:false,ox:0,oy:0,ow:0,oh:0,mode:'move'};
+overlay.style.left = '10%'; overlay.style.right = '10%'; overlay.style.bottom='6%'; overlay.style.height='22%';
+
+overlay.addEventListener('pointerdown', e=>{
+  overlay.setPointerCapture(e.pointerId);
+  drag.active = true;
+  drag.ox = e.clientX; drag.oy = e.clientY;
+  const r = overlay.getBoundingClientRect(); drag.ow=r.width; drag.oh=r.height; drag.l = r.left; drag.t=r.top;
+  // modifier to resize: hold Alt to resize vertically, Shift to resize horizontally
+  drag.mode = e.altKey ? 'resizeV' : (e.shiftKey ? 'resizeH' : 'move');
+});
+window.addEventListener('pointermove', e=>{
+  if(!drag.active) return;
+  const dx = e.clientX - drag.ox, dy = e.clientY - drag.oy;
+  if(drag.mode === 'move'){
+    const cw = canvasWrap.getBoundingClientRect();
+    let left = ((drag.l + dx) - cw.left)/cw.width*100;
+    let top = ((drag.t + dy) - cw.top)/cw.height*100;
+    // clamp
+    left = Math.max(0, Math.min(100 - (overlay.offsetWidth / cw.width*100), left));
+    top = Math.max(0, Math.min(100 - (overlay.offsetHeight / cw.height*100), top));
+    overlay.style.left = left + '%'; overlay.style.top = top + '%'; overlay.style.right = 'auto'; overlay.style.bottom='auto';
+  } else if(drag.mode === 'resizeH'){
+    const cw = canvasWrap.getBoundingClientRect();
+    let newW = Math.max(40, drag.ow + dx);
+    overlay.style.width = newW + 'px'; overlay.style.right='auto';
+  } else if(drag.mode === 'resizeV'){
+    let newH = Math.max(20, drag.oh + dy);
+    overlay.style.height = newH + 'px';
+  }
+});
+window.addEventListener('pointerup', e=>{ if(drag.active){ overlay.releasePointerCapture(e.pointerId); drag.active=false; } });
+
+// Fit and center
+$('fitWidth').addEventListener('click', ()=>{
+  const cw = canvasWrap.getBoundingClientRect();
+  overlay.style.left = '2%'; overlay.style.right = '2%'; overlay.style.top = '60%'; overlay.style.bottom='auto'; overlay.style.height='22%';
+});
+$('centerHoriz').addEventListener('click', ()=>{
+  overlay.style.left = '10%'; overlay.style.right='10%'; overlay.style.top='60%'; overlay.style.bottom='auto';
+});
+
+// File load
+fileInput.addEventListener('change', async (e)=>{
+  const f = e.target.files && e.target.files[0];
+  if(!f) return;
+  video.src = URL.createObjectURL(f);
+  video.load();
+  log('Loaded video: ' + f.name);
+});
+
+// Play/pause
+$('playBtn').addEventListener('click', ()=>{ if(video.paused) video.play(); else video.pause(); });
+
+// Key slicing
+$('sliceKeys').addEventListener('click', ()=>{
+  keyRects = [];
+  keyPreview.innerHTML='';
+  const n = parseInt($('numKeys').value||'25',10);
+  const base = parseInt($('baseMidi').value||'36',10);
+  const rect = overlay.getBoundingClientRect();
+  const cwr = canvasWrap.getBoundingClientRect();
+  // compute keys in video coordinate space
+  const left = Math.max(0, rect.left - cwr.left);
+  const top = Math.max(0, rect.top - cwr.top);
+  const width = rect.width; const height = rect.height;
+  for(let i=0;i<n;i++){
+    const keyW = width / n;
+    const kr = {left: left + i*keyW, top: top, width: keyW, height: height, midi: base + i};
+    keyRects.push(kr);
+    const b = document.createElement('div'); b.style.padding='6px 8px'; b.style.background='rgba(255,255,255,.03)'; b.style.borderRadius='6px'; b.textContent='Key '+i+' → '+kr.midi; keyPreview.appendChild(b);
+  }
+  log('Sliced overlay into '+n+' keys starting MIDI '+base);
+});
+$('clearKeys').addEventListener('click', ()=>{ keyRects=[]; keyPreview.innerHTML=''; log('Cleared key map'); });
+
+// Logging
+function log(s){ logEl.value = (new Date()).toLocaleTimeString() + '  ' + s + '\n' + logEl.value; }
+
+// Sampling setup
+const sampleCanvas = document.createElement('canvas');
+const sampleCtx = sampleCanvas.getContext('2d');
+
+function getFrameImageData(){
+  const w = video.videoWidth, h = video.videoHeight;
+  if(!w || !h) return null;
+  sampleCanvas.width = w; sampleCanvas.height = h;
+  sampleCtx.drawImage(video, 0, 0, w, h);
+  return sampleCtx.getImageData(0,0,w,h);
+}
+
+function sampleRectMeanColor(imgData, rect){
+  const w = imgData.width, d = imgData.data;
+  const x0 = Math.max(0, Math.floor(rect.left));
+  const y0 = Math.max(0, Math.floor(rect.top));
+  const x1 = Math.min(w, Math.floor(rect.left + rect.width));
+  const y1 = Math.min(imgData.height, Math.floor(rect.top + rect.height));
+  let r=0,g=0,b=0,c=0;
+  for(let y=y0;y<y1;y++){
+    for(let x=x0;x<x1;x++){
+      const idx = (y*w + x)*4; r+=d[idx]; g+=d[idx+1]; b+=d[idx+2]; c++;
+    }
+  }
+  if(c===0) return {r:0,g:0,b:0};
+  return {r: Math.round(r/c), g: Math.round(g/c), b: Math.round(b/c)};
+}
+
+// Detection algorithm: compute brightness delta against rolling background
+
+function brightness(col){ return 0.299*col.r + 0.587*col.g + 0.114*col.b; }
+
+// Main analysis
+let sampleIntervalId = null;
+let lastState = []; // per key: 0 or 1
+let background = []; // per key baseline brightness
+
+$('startAnalysis').addEventListener('click', ()=>{
+  if(!video.src){ alert('Load a video file first'); return; }
+  if(keyRects.length===0){ alert('Slice keys first'); return; }
+  events = [];
+  lastState = new Array(keyRects.length).fill(0);
+  background = new Array(keyRects.length).fill(null);
+  analyzing = true;
+  video.currentTime = 0; video.muted = true; video.play();
+  const fps = Math.max(1, parseInt($('sampleFps').value||'25',10));
+  const ms = Math.round(1000 / fps);
+  const sampleSize = Math.max(1, parseInt($('sampleSize').value||'5',10));
+  const threshold = Math.max(1, parseInt($('threshold').value||'30',10));
+  const canvasRect = canvasWrap.getBoundingClientRect();
+
+  log('Starting analysis — sampling at '+fps+' fps, threshold '+threshold+', sample size '+sampleSize);
+
+  sampleIntervalId = setInterval(()=>{
+    if(video.paused || video.readyState < 2) return;
+    const img = getFrameImageData();
+    if(!img) return;
+    // compute key rects in video pixel coords
+    const cwr = canvasWrap.getBoundingClientRect();
+    const videoW = video.videoWidth, videoH = video.videoHeight;
+    const wrapW = cwr.width, wrapH = cwr.height;
+    const sx = (videoW / wrapW); // scale factor from wrap px -> video pixels
+    const sy = (videoH / wrapH);
+
+    const t = video.currentTime; // seconds
+    keyRects.forEach((kr, idx)=>{
+      const rect = {
+        left: Math.round(kr.left * sx),
+        top: Math.round(kr.top * sy),
+        width: Math.max(1, Math.round(kr.width * sx)),
+        height: Math.max(1, Math.round(kr.height * sy))
+      };
+      // sample a small centered box
+      const cx = rect.left + Math.floor(rect.width/2);
+      const cy = rect.top + Math.floor(rect.height/2);
+      const half = Math.floor(sampleSize/2);
+      const srect = {left: cx-half, top: cy-half, width: sampleSize, height: sampleSize};
+      const col = sampleRectMeanColor(img, srect);
+      const b = brightness(col);
+      if(background[idx]===null) background[idx]=b; // initialize
+      const delta = b - background[idx];
+      // Update background slowly (simple running average)
+      background[idx] = background[idx]*0.98 + b*0.02;
+
+      const isOn = delta < -threshold ? 1 : 0; // important: synthesia typically lights keys with bright color on black background; we look for drop in brightness
+      // change detection with hysteresis
+      if(isOn && !lastState[idx]){
+        // note on
+        events.push({time:t, type:'on', midi: kr.midi});
+        lastState[idx]=1; log('Note ON '+kr.midi+' @'+t.toFixed(3)+'s');
+      } else if(!isOn && lastState[idx]){
+        // note off
+        events.push({time:t, type:'off', midi: kr.midi});
+        lastState[idx]=0; log('Note OFF '+kr.midi+' @'+t.toFixed(3)+'s');
+      }
+    });
+
+    // update progress
+    const prog = Math.min(1, video.currentTime / Math.max(1, video.duration || 1));
+    $('progressBar').style.width = (prog*100)+'%';
+
+    // If we've reached near the end, stop automatically
+    if(video.ended || video.currentTime >= video.duration - (1/fps)){
+      stopAnalysis();
+    }
+  }, ms);
+});
+
+function stopAnalysis(){
+  if(sampleIntervalId) clearInterval(sampleIntervalId);
+  sampleIntervalId = null; analyzing=false; video.pause();
+  log('Analysis stopped. Events: '+events.length);
+}
+$('stopAnalysis').addEventListener('click', stopAnalysis);
+
+// MIDI builder
+function writeVLQ(value){
+  let buffer = value & 0x7F;
+  const bytes = [];
+  while((value >>= 7)){
+    buffer <<= 8;
+    buffer |= ((value & 0x7F) | 0x80);
+  }
+  while(true){
+    bytes.push(buffer & 0xFF);
+    if(buffer & 0x80) buffer >>= 8; else break;
+  }
+  return bytes;
+}
+
+function buildSMFFromEvents(eventsArr, {bpm=120, ppq=480}={}){
+  // convert events to delta ticks
+  // first, sort by time ascending
+  const evs = eventsArr.slice().sort((a,b)=>a.time - b.time || (a.type==='on'?-1:1));
+  const mpqn = Math.round(60000000 / Math.max(1, bpm));
+  const bytes = [];
+  function pushStr(s){ for(let i=0;i<s.length;i++) bytes.push(s.charCodeAt(i)); }
+  function push32be(n){ bytes.push((n>>>24)&255, (n>>>16)&255, (n>>>8)&255, n&255); }
+  function push16be(n){ bytes.push((n>>>8)&255, n&255); }
+
+  pushStr('MThd'); push32be(6); push16be(0); push16be(1); push16be(ppq);
+
+  // build track
+  const track = [];
+  // set tempo
+  track.push(...writeVLQ(0)); track.push(0xFF,0x51,0x03,(mpqn>>>16)&255,(mpqn>>>8)&255,mpqn&255);
+  // program change
+  track.push(...writeVLQ(0)); track.push(0xC0, 0x00);
+
+  if(evs.length===0){
+    // empty track, just end
+    track.push(...writeVLQ(0)); track.push(0xFF,0x2F,0x00);
+    pushStr('MTrk'); push32be(track.length); bytes.push(...track);
+    return new Uint8Array(bytes);
+  }
+
+  const ticksPerSec = ppq * (bpm/60);
+  let lastTick = 0;
+  // for each event
+  for(const e of evs){
+    const tick = Math.round(e.time * ticksPerSec);
+    const delta = Math.max(0, tick - lastTick);
+    track.push(...writeVLQ(delta));
+    if(e.type === 'on'){
+      track.push(0x90, e.midi & 0x7F, 0x64);
+    } else {
+      track.push(0x80, e.midi & 0x7F, 0x40);
+    }
+    lastTick = tick;
+  }
+  // end of track
+  track.push(...writeVLQ(0)); track.push(0xFF,0x2F,0x00);
+  pushStr('MTrk'); push32be(track.length); bytes.push(...track);
+  return new Uint8Array(bytes);
+}
+
+$('downloadMidi').addEventListener('click', ()=>{
+  if(events.length===0){ alert('No events detected yet. Run analysis first.'); return; }
+  const bpm = Math.max(20, parseInt($('bpm').value||'120',10));
+  const ppq = Math.max(24, parseInt($('ppq').value||'480',10));
+  const smf = buildSMFFromEvents(events, {bpm, ppq});
+  const blob = new Blob([smf], {type: 'audio/midi'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'video-converted.mid'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 30000);
+  log('MIDI generated: '+events.length+' events');
+});
+
+</script>
+</body>
+</html>

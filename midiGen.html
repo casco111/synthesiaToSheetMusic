@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>C Major Scale MIDI Generator</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <h1>🎹 C Major Scale – MIDI Generator</h1>
+      <p>Click the button to create and download a standard <code>.mid</code> file that plays the C major scale (C4 → C5). No libraries required.</p>
+
+      <div class="controls">
+        <div class="field">
+          <label for="bpm">Tempo (BPM)</label>
+          <input id="bpm" type="number" value="120" min="20" max="300"/>
+        </div>
+        <div class="field">
+          <label for="tpq">Ticks per Quarter Note (PPQ)</label>
+          <input id="tpq" type="number" value="480" min="24" max="960"/>
+        </div>
+        <div class="field">
+          <label for="dur">Note length (quarters)</label>
+          <input id="dur" type="number" value="1" min="0.25" step="0.25"/>
+        </div>
+      </div>
+
+      <div class="btns">
+        <button class="primary" id="make">Generate & Download MIDI</button>
+        <button class="ghost" id="preview">Quick Hex Preview</button>
+        <a id="dl" class="small ghost" download style="display:none">Download ready</a>
+      </div>
+
+      <pre id="hex" style="display:none; white-space:pre-wrap; word-break:break-word; font-size:12px; line-height:1.35; margin-top:14px"></pre>
+
+      <div class="footer">MIDI Format 0 • One track • Acoustic Grand Piano (Program 0)
+      </div>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+
+</body>
+</html>

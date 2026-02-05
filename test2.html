@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Video + Overlay Sampler</title>
+<style>
+  :root{--bg:#0b1220;--panel:#0f1a2e;--muted:#9fb0d9;--accent:#6ea8fe}
+  body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,#041022,#071832);color:#eaf0ff;display:flex;align-items:flex-start;gap:18px;padding:18px;min-height:100vh}
+  .ui{width:360px;min-width:260px}
+  h1{font-size:18px;margin:0 0 6px}
+  p{margin:0 0 12px;color:var(--muted);font-size:13px}
+  label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
+  input,button,select{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.02);color:inherit;margin-bottom:8px}
+  button.primary{background:linear-gradient(90deg,var(--accent),#9d78ff);border:none;color:#02102a;font-weight:700}
+  .stage{flex:1;display:flex;align-items:center;justify-content:center;min-height:60vh;position:relative}
+  .video-wrap{position:relative;background:#000;border-radius:10px;overflow:hidden;max-width:100%;max-height:90vh;border:1px solid rgba(255,255,255,.04)}
+  video{display:block;max-width:100%;height:auto;width:100%}
+  /* draggable overlay */
+  .overlay{
+    position:absolute; left:10%; top:60%; width:50%; height:22%;
+    border:2px dashed rgba(255,255,255,.18); background-repeat:no-repeat; background-size:cover;
+    display:flex;align-items:flex-end;justify-content:flex-end;box-shadow:0 6px 20px rgba(0,0,0,.6);
+    touch-action:none;
+  }
+  .handle{width:18px;height:18px;background:linear-gradient(180deg,rgba(255,255,255,.12),rgba(0,0,0,.12));border-radius:4px;margin:8px;cursor:se-resize;touch-action:none}
+  .coords{font-size:12px;color:var(--muted);margin-top:6px}
+  .log{height:120px;overflow:auto;background:rgba(0,0,0,.25);padding:8px;border-radius:8px;color:var(--muted);font-size:13px}
+  .small{font-size:13px;padding:6px}
+</style>
+</head>
+<body>
+
+  <div class="ui">
+    <h1>Video → Overlay Sampler</h1>
+    <p>Load a video, then upload an overlay image. Drag / resize the overlay so it lines up with keys. Use sample to read pixels from the video in overlay area.</p>
+
+    <label>Video file (mp4, webm)</label>
+    <input id="videoFile" type="file" accept="video/*">
+
+    <label>Overlay image (png/jpg) — placed on top of video</label>
+    <input id="overlayFile" type="file" accept="image/*">
+
+    <div style="display:flex;gap:8px">
+      <button id="fullscreenBtn" class="small">Toggle Fullscreen</button>
+      <button id="fitBtn" class="small">Fit to Video</button>
+    </div>
+
+    <label>Sample size (px)</label>
+    <input id="sampleSize" type="number" value="5" min="1" />
+
+    <button id="sampleBtn" class="primary">Sample Mean Color</button>
+    <button id="getRectBtn" class="small">Get Overlay Rect (video px)</button>
+
+    <div class="coords" id="coords">Overlay rect: —</div>
+
+    <label>Log</label>
+    <div class="log" id="log"></div>
+
+  </div>
+
+  <div class="stage">
+    <div class="video-wrap" id="videoWrap" style="width:960px;">
+      <video id="video" controls crossorigin="anonymous"></video>
+
+      <!-- overlay: draggable & resizable element -->
+      <div id="overlay" class="overlay" hidden>
+        <div id="handle" class="handle" title="Drag to resize"></div>
+      </div>
+
+      <!-- hidden canvas for sampling -->
+      <canvas id="sampleCanvas" style="display:none;"></canvas>
+    </div>
+  </div>
+
+<script>
+/*
+  Features:
+  - Load video via <input type="file">
+  - Load overlay image and show it as background of .overlay
+  - Overlay draggable and resizable (pointer events)
+  - getOverlayRectInVideoPixels() returns {left, top, width, height} in VIDEO intrinsic pixels
+  - sampleOverlayMeanColor(sampleSize) returns {r,g,b,a} mean color sampled from the current video frame
+*/
+
+// Elements
+const videoFile = document.getElementById('videoFile');
+const overlayFile = document.getElementById('overlayFile');
+const video = document.getElementById('video');
+const videoWrap = document.getElementById('videoWrap');
+const overlay = document.getElementById('overlay');
+const handle = document.getElementById('handle');
+const sampleCanvas = document.getElementById('sampleCanvas');
+const sampleSizeInput = document.getElementById('sampleSize');
+const sampleBtn = document.getElementById('sampleBtn');
+const getRectBtn = document.getElementById('getRectBtn');
+const coordsEl = document.getElementById('coords');
+const logEl = document.getElementById('log');
+const fullscreenBtn = document.getElementById('fullscreenBtn');
+const fitBtn = document.getElementById('fitBtn');
+
+function log(s){ logEl.textContent = `[${new Date().toLocaleTimeString()}] ${s}\n` + logEl.textContent; }
+
+// --- Load video file ---
+videoFile.addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  if(!f) return;
+  video.src = URL.createObjectURL(f);
+  video.load();
+  video.addEventListener('loadedmetadata', () => {
+    log(`Video loaded — intrinsic ${video.videoWidth}×${video.videoHeight}, duration ${video.duration.toFixed(2)}s`);
+    // try to size the videoWrap to the video's intrinsic aspect ratio but limited by viewport
+    fitVideoWrap();
+  }, { once:true });
+});
+
+// Fit container to video's aspect ratio (as big as possible while staying within viewport)
+function fitVideoWrap(){
+  const maxW = Math.min(window.innerWidth - 420, window.innerHeight - 60); // leave UI room
+  const intrinsicW = video.videoWidth || 960;
+  const intrinsicH = video.videoHeight || 540;
+  const aspect = intrinsicW / intrinsicH;
+  let w = Math.min(maxW, intrinsicW);
+  let h = w / aspect;
+  if(h > window.innerHeight - 60){
+    h = window.innerHeight - 60;
+    w = h * aspect;
+  }
+  videoWrap.style.width = Math.round(w) + 'px';
+  videoWrap.style.height = Math.round(h) + 'px';
+  video.style.width = '100%';
+  video.style.height = '100%';
+}
+window.addEventListener('resize', () => {
+  if(video.src) fitVideoWrap();
+});
+
+// --- Fullscreen toggle ---
+fullscreenBtn.addEventListener('click', async () => {
+  if (!document.fullscreenElement) {
+    await videoWrap.requestFullscreen().catch(err => log('Fullscreen failed: ' + err.message));
+  } else {
+    document.exitFullscreen();
+  }
+});
+
+// Fit overlay to video width (default)
+fitBtn.addEventListener('click', () => {
+  overlay.style.left = '5%';
+  overlay.style.top = '60%';
+  overlay.style.width = '90%';
+  overlay.style.height = '28%';
+  overlay.hidden = false;
+});
+
+// --- Load overlay image ---
+overlayFile.addEventListener('change', async e => {
+  const f = e.target.files && e.target.files[0];
+  if(!f) return;
+  const url = URL.createObjectURL(f);
+  overlay.style.backgroundImage = `url("${url}")`;
+  overlay.hidden = false;
+  // position default
+  overlay.style.left = '10%';
+  overlay.style.top = '60%';
+  overlay.style.width = '60%';
+  overlay.style.height = '20%';
+  log('Overlay image loaded: ' + f.name);
+});
+
+// --- Drag to move overlay ---
+let dragState = null;
+overlay.addEventListener('pointerdown', e => {
+  // if clicking handle will be handled separately
+  if(e.target === handle) return;
+  overlay.setPointerCapture(e.pointerId);
+  const rect = overlay.getBoundingClientRect();
+  dragState = {
+    type: 'move',
+    startX: e.clientX,
+    startY: e.clientY,
+    initLeft: rect.left,
+    initTop: rect.top
+  };
+});
+window.addEventListener('pointermove', e => {
+  if(!dragState) return;
+  if(dragState.type !== 'move') return;
+  const wrapRect = videoWrap.getBoundingClientRect();
+  let nx = dragState.initLeft + (e.clientX - dragState.startX);
+  let ny = dragState.initTop + (e.clientY - dragState.startY);
+  // clamp inside videoWrap
+  nx = Math.max(wrapRect.left, Math.min(wrapRect.right - overlay.offsetWidth, nx));
+  ny = Math.max(wrapRect.top, Math.min(wrapRect.bottom - overlay.offsetHeight, ny));
+  // convert to percentage positions relative to wrap
+  overlay.style.left = ((nx - wrapRect.left) / wrapRect.width * 100) + '%';
+  overlay.style.top = ((ny - wrapRect.top) / wrapRect.height * 100) + '%';
+});
+window.addEventListener('pointerup', e => {
+  if(dragState){ overlay.releasePointerCapture && overlay.releasePointerCapture(e.pointerId); dragState = null; }
+});
+
+// --- Resize with handle (SE corner) ---
+let resizeState = null;
+handle.addEventListener('pointerdown', e => {
+  e.stopPropagation();
+  handle.setPointerCapture(e.pointerId);
+  const rect = overlay.getBoundingClientRect();
+  resizeState = {
+    startX: e.clientX, startY: e.clientY,
+    initW: rect.width, initH: rect.height,
+    initLeft: rect.left, initTop: rect.top
+  };
+});
+window.addEventListener('pointermove', e => {
+  if(!resizeState) return;
+  const wrapRect = videoWrap.getBoundingClientRect();
+  let newW = Math.max(20, resizeState.initW + (e.clientX - resizeState.startX));
+  let newH = Math.max(20, resizeState.initH + (e.clientY - resizeState.startY));
+  // clamp to wrap
+  const leftPx = parseFloat(overlay.style.left || overlay.getBoundingClientRect().left) ;
+  // easiest: set width/height as percentages
+  overlay.style.width = (newW / wrapRect.width * 100) + '%';
+  overlay.style.height = (newH / wrapRect.height * 100) + '%';
+});
+window.addEventListener('pointerup', e => {
+  if(resizeState){ handle.releasePointerCapture && handle.releasePointerCapture(e.pointerId); resizeState = null; }
+});
+
+// --- Utility: compute overlay rect in VIDEO intrinsic pixel coordinates ---
+// Returns { left, top, width, height } in video pixels (absolute to video frame).
+function getOverlayRectInVideoPixels(){
+  if(!video.videoWidth || !video.videoHeight) {
+    log('Video metadata not ready.');
+    return null;
+  }
+  const wrapRect = videoWrap.getBoundingClientRect();
+  const vidRect = video.getBoundingClientRect(); // where the video is drawn
+  const overlayRect = overlay.getBoundingClientRect();
+
+  // Determine relative position of overlay inside the drawn video element (in px)
+  const relLeft = overlayRect.left - vidRect.left;
+  const relTop  = overlayRect.top  - vidRect.top;
+  const relWidth  = overlayRect.width;
+  const relHeight = overlayRect.height;
+
+  // If the video is letterboxed inside video element, compute the scaling and offsets.
+  // In our layout video is sized to fill video element (object-fit: contain default), but to be safe:
+  const drawnW = vidRect.width;
+  const drawnH = vidRect.height;
+
+  // scale from drawn pixels -> intrinsic video pixels
+  const scaleX = video.videoWidth / drawnW;
+  const scaleY = video.videoHeight / drawnH;
+
+  const videoLeft = Math.round(relLeft * scaleX);
+  const videoTop  = Math.round(relTop  * scaleY);
+  const videoW    = Math.round(relWidth * scaleX);
+  const videoH    = Math.round(relHeight * scaleY);
+
+  const rect = { left: videoLeft, top: videoTop, width: videoW, height: videoH };
+  coordsEl.textContent = `Overlay rect: left ${rect.left}, top ${rect.top}, w ${rect.width}, h ${rect.height} (video px)`;
+  log(`Computed overlay rect in video pixels: ${JSON.stringify(rect)}`);
+  return rect;
+}
+
+// --- Sampling: draw current video frame to canvas and get imageData for overlay rect ---
+function sampleOverlayMeanColor(sampleSize=5){
+  if(video.paused && video.readyState < 2) log('Video not ready or frame not available.');
+  const rect = getOverlayRectInVideoPixels();
+  if(!rect) return null;
+
+  // ensure sampleCanvas matches video's intrinsic size
+  sampleCanvas.width = video.videoWidth;
+  sampleCanvas.height = video.videoHeight;
+  const ctx = sampleCanvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+
+  // sample multiple small boxes within the overlay area and average
+  const sx = Math.max(0, rect.left);
+  const sy = Math.max(0, rect.top);
+  const sw = Math.max(1, Math.min(rect.width, video.videoWidth - sx));
+  const sh = Math.max(1, Math.min(rect.height, video.videoHeight - sy));
+
+  // if overlay bigger than sampleSize, we'll sample a grid of points
+  const stepX = Math.max(1, Math.floor(sw / Math.ceil(sw / sampleSize)));
+  const stepY = Math.max(1, Math.floor(sh / Math.ceil(sh / sampleSize)));
+
+  let r=0,g=0,b=0,a=0,count=0;
+  for(let y = sy; y < sy+sh; y += stepY){
+    for(let x = sx; x < sx+sw; x += stepX){
+      const w = Math.min(sampleSize, sx+sw - x);
+      const h = Math.min(sampleSize, sy+sh - y);
+      const img = ctx.getImageData(x, y, w, h);
+      const d = img.data;
+      for(let i=0;i<d.length;i+=4){
+        r += d[i]; g += d[i+1]; b += d[i+2]; a += d[i+3]; count++;
+      }
+    }
+  }
+  if(count === 0) return null;
+  const mean = { r: Math.round(r/count), g: Math.round(g/count), b: Math.round(b/count), a: Math.round(a/count) };
+  log(`Sampled mean color: rgba(${mean.r}, ${mean.g}, ${mean.b}, ${mean.a})`);
+  return mean;
+}
+
+// Button handlers
+sampleBtn.addEventListener('click', () => {
+  const s = Math.max(1, parseInt(sampleSizeInput.value || '5', 10));
+  const mean = sampleOverlayMeanColor(s);
+  if(mean) alert(`Mean color: rgba(${mean.r}, ${mean.g}, ${mean.b}, ${mean.a})`);
+});
+
+getRectBtn.addEventListener('click', () => {
+  const rect = getOverlayRectInVideoPixels();
+  if(!rect) alert('Video metadata not ready or overlay not visible.');
+});
+
+// Expose some functions to window for debugging / external use
+window.getOverlayRectInVideoPixels = getOverlayRectInVideoPixels;
+window.sampleOverlayMeanColor = sampleOverlayMeanColor;
+window.debugLog = log;
+
+</script>
+</body>
+</html>

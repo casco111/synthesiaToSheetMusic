@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Drag & Drop Video Player with Pixel Reader</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f0f0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
+    }
+    .drop-area {
+      border: 2px dashed #888;
+      border-radius: 10px;
+      background: #fff;
+      width: 400px;
+      height: 200px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #888;
+      font-size: 1.2em;
+      margin-bottom: 20px;
+      transition: border-color 0.2s;
+    }
+    .drop-area.dragover {
+      border-color: #007bff;
+      color: #007bff;
+    }
+    video {
+      max-width: 100%;
+      max-height: 400px;
+      display: none;
+      margin-top: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .controls {
+      display: none;
+      margin-top: 20px;
+      background: #fff;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      width: 400px;
+    }
+    .control-group {
+      margin-bottom: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+    input {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      box-sizing: border-box;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 5px;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    .pixel-info {
+      margin-top: 15px;
+      padding: 10px;
+      background: #f8f9fa;
+      border-radius: 5px;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    canvas {
+      display: none;
+      position: absolute;
+      left: -9999px;
+    }
+    #cursor-overlay {
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    .draggable-cursor {
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      background: rgba(255,0,0,0.7);
+      border: 2px solid #fff;
+      border-radius: 50%;
+      cursor: pointer;
+      pointer-events: auto;
+      z-index: 10;
+      box-shadow: 0 0 4px #0008;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .draggable-cursor::after {
+      content: '';
+      display: block;
+      width: 2px;
+      height: 18px;
+      background: #fff;
+      position: absolute;
+      left: 8px;
+      top: 0;
+    }
+    .draggable-cursor::before {
+      content: '';
+      display: block;
+      width: 18px;
+      height: 2px;
+      background: #fff;
+      position: absolute;
+      top: 8px;
+      left: 0;
+    }
+    #brightness-indicator {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: rgba(255,255,0,0.7);
+      border: 3px solid #fff200;
+      box-shadow: 0 0 16px 6px #fff200;
+      animation: blink 1s infinite;
+      display: none;
+      z-index: 20;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.2; }
+    }
+  </style>
+</head>
+<body>
+  <div class="drop-area" id="drop-area">
+    Drag & drop a video file here
+  </div>
+  <div style="position: relative; display: inline-block;">
+    <video id="video" controls></video>
+    <div id="cursor-overlay" style="position: absolute; top: 0; left: 0; pointer-events: none;"></div>
+    <div id="brightness-indicator" style="position: absolute; top: 10px; right: 10px; display: none;"></div>
+  </div>
+  <canvas id="canvas"></canvas>
+  
+  <div class="controls" id="controls">
+    <div class="control-group">
+      <label for="x-coord">X Coordinate:</label>
+      <input type="number" id="x-coord" value="100" min="0">
+    </div>
+    <div class="control-group">
+      <label for="y-coord">Y Coordinate:</label>
+      <input type="number" id="y-coord" value="100" min="0">
+    </div>
+    <div class="control-group">
+      <label for="brightness-threshold">Brightness Threshold (0-255):</label>
+      <input type="number" id="brightness-threshold" value="200" min="0" max="255">
+    </div>
+    <div class="control-group">
+      <label for="frame-time">Frame Time (seconds):</label>
+      <input type="number" id="frame-time" value="0" min="0" step="0.1">
+    </div>
+    <button onclick="readPixel()">Read Pixel</button>
+    <button onclick="readCurrentFrame()">Read Current Frame</button>
+    <div class="pixel-info" id="pixel-info"></div>
+  </div>
+
+  <script>
+    const dropArea = document.getElementById('drop-area');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const controls = document.getElementById('controls');
+    const pixelInfo = document.getElementById('pixel-info');
+    const ctx = canvas.getContext('2d');
+    const cursorOverlay = document.getElementById('cursor-overlay');
+    let videoRect = null;
+    let draggingCursor = null;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    // Initial positions for two cursors
+    let cursorPositions = [
+      { x: 100, y: 100 }
+    ];
+
+    dropArea.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropArea.classList.add('dragover');
+    });
+
+    dropArea.addEventListener('dragleave', () => {
+      dropArea.classList.remove('dragover');
+    });
+
+    dropArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropArea.classList.remove('dragover');
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('video/')) {
+        const url = URL.createObjectURL(file);
+        video.src = url;
+        video.style.display = 'block';
+        controls.style.display = 'block';
+        video.load();
+        video.play();
+        dropArea.textContent = 'Drag & drop a video file here';
+      } else {
+        dropArea.textContent = 'Please drop a valid video file!';
+      }
+    });
+
+    function updateOverlaySize() {
+      if (!video.videoWidth || !video.videoHeight) return;
+      const rect = video.getBoundingClientRect();
+      cursorOverlay.style.width = rect.width + 'px';
+      cursorOverlay.style.height = rect.height + 'px';
+      cursorOverlay.style.left = video.offsetLeft + 'px';
+      cursorOverlay.style.top = video.offsetTop + 'px';
+      videoRect = rect;
+    }
+
+    function createCursors() {
+      cursorOverlay.innerHTML = '';
+      const cursor = document.createElement('div');
+      cursor.className = 'draggable-cursor';
+      cursor.style.left = (cursorPositions[0].x - 9) + 'px';
+      cursor.style.top = (cursorPositions[0].y - 9) + 'px';
+      cursor.setAttribute('data-index', 0);
+      cursor.addEventListener('mousedown', startDragCursor);
+      cursorOverlay.appendChild(cursor);
+    }
+
+    function startDragCursor(e) {
+      e.preventDefault();
+      draggingCursor = e.target;
+      offsetX = e.offsetX;
+      offsetY = e.offsetY;
+      document.addEventListener('mousemove', dragCursor);
+      document.addEventListener('mouseup', stopDragCursor);
+    }
+
+    function dragCursor(e) {
+      if (!draggingCursor || !videoRect) return;
+      const overlayRect = cursorOverlay.getBoundingClientRect();
+      let x = e.clientX - overlayRect.left - offsetX;
+      let y = e.clientY - overlayRect.top - offsetY;
+      // Clamp to video bounds
+      x = Math.max(0, Math.min(x, overlayRect.width - 18));
+      y = Math.max(0, Math.min(y, overlayRect.height - 18));
+      draggingCursor.style.left = x + 'px';
+      draggingCursor.style.top = y + 'px';
+      const idx = parseInt(draggingCursor.getAttribute('data-index'));
+      cursorPositions[idx].x = x + 9;
+      cursorPositions[idx].y = y + 9;
+      // Update input fields if dragging first cursor
+      if (idx === 0) {
+        document.getElementById('x-coord').value = Math.round(cursorPositions[0].x);
+        document.getElementById('y-coord').value = Math.round(cursorPositions[0].y);
+      }
+    }
+
+    function stopDragCursor() {
+      draggingCursor = null;
+      document.removeEventListener('mousemove', dragCursor);
+      document.removeEventListener('mouseup', stopDragCursor);
+    }
+
+    // Sync input fields to cursor
+    document.getElementById('x-coord').addEventListener('input', function() {
+      cursorPositions[0].x = parseInt(this.value);
+      createCursors();
+    });
+    document.getElementById('y-coord').addEventListener('input', function() {
+      cursorPositions[0].y = parseInt(this.value);
+      createCursors();
+    });
+
+    // When video is loaded, update overlay and cursors
+    video.addEventListener('loadedmetadata', () => {
+      updateOverlaySize();
+      createCursors();
+    });
+    window.addEventListener('resize', () => {
+      updateOverlaySize();
+      createCursors();
+    });
+    video.addEventListener('play', updateOverlaySize);
+    video.addEventListener('resize', updateOverlaySize);
+
+    // Show overlay and cursors when video is loaded
+    dropArea.addEventListener('drop', () => {
+      setTimeout(() => {
+        updateOverlaySize();
+        createCursors();
+        cursorOverlay.style.display = 'block';
+      }, 300);
+    });
+
+    // Use cursor position for pixel reading
+    function readPixel() {
+      const x = Math.round(cursorPositions[0].x);
+      const y = Math.round(cursorPositions[0].y);
+      document.getElementById('x-coord').value = x;
+      document.getElementById('y-coord').value = y;
+      const frameTime = parseFloat(document.getElementById('frame-time').value);
+      video.currentTime = frameTime;
+      video.addEventListener('seeked', function onSeeked() {
+        video.removeEventListener('seeked', onSeeked);
+        captureFrameAndReadPixel(x, y, true);
+      }, { once: true });
+    }
+    function readCurrentFrame() {
+      const x = Math.round(cursorPositions[0].x);
+      const y = Math.round(cursorPositions[0].y);
+      document.getElementById('x-coord').value = x;
+      document.getElementById('y-coord').value = y;
+      captureFrameAndReadPixel(x, y, true);
+    }
+
+    // Brightness indicator logic
+    const brightnessIndicator = document.getElementById('brightness-indicator');
+    let brightnessThreshold = parseInt(document.getElementById('brightness-threshold').value);
+    document.getElementById('brightness-threshold').addEventListener('input', function() {
+      brightnessThreshold = parseInt(this.value);
+    });
+
+    function checkBrightnessOnFrame() {
+      if (video.paused || video.ended) {
+        brightnessIndicator.style.display = 'none';
+        return;
+      }
+      const x = Math.round(cursorPositions[0].x);
+      const y = Math.round(cursorPositions[0].y);
+      captureFrameAndReadPixel(x, y, false);
+      requestAnimationFrame(checkBrightnessOnFrame);
+    }
+
+    video.addEventListener('play', () => {
+      requestAnimationFrame(checkBrightnessOnFrame);
+    });
+    video.addEventListener('pause', () => {
+      brightnessIndicator.style.display = 'none';
+    });
+    video.addEventListener('ended', () => {
+      brightnessIndicator.style.display = 'none';
+    });
+
+    function captureFrameAndReadPixel(x, y, showInfo) {
+      // Set canvas size to match video
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const pixelData = ctx.getImageData(x, y, 1, 1).data;
+      const r = pixelData[0];
+      const g = pixelData[1];
+      const b = pixelData[2];
+      const a = pixelData[3];
+      const brightness = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+      if (brightness >= brightnessThreshold) {
+        brightnessIndicator.style.display = 'block';
+      } else {
+        brightnessIndicator.style.display = 'none';
+      }
+      if (showInfo) {
+        const hex = '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+        pixelInfo.innerHTML = `
+          <strong>Pixel at (${x}, ${y}) at ${video.currentTime.toFixed(2)}s:</strong><br>
+          RGB: (${r}, ${g}, ${b})<br>
+          Alpha: ${a}<br>
+          Hex: ${hex}<br>
+          Brightness: ${brightness}<br>
+          Video dimensions: ${video.videoWidth} × ${video.videoHeight}
+        `;
+      }
+    }
+
+    // Update frame time input when video time changes
+    video.addEventListener('timeupdate', () => {
+      document.getElementById('frame-time').value = video.currentTime.toFixed(2);
+    });
+  </script>
+</body>
+</html>

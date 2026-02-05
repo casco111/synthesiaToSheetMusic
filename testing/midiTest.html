@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>C Major Scale MIDI Generator</title>
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <div class="ui">
+      <h1>Select synthesia video</h1>
+      <input class="primary" id="fileInput" type="file" accept="video/*" />
+      <div class="controls">
+        <button id="setLayout" class="primary hidden">Set layout</button>
+        <label for="scaleInput">set scale</label>
+        <input id="scaleInput" type="range" min="75" max="125" value="75">
+        
+        <label for="colorDetect">Note Detection Color</label>
+        <input id="colorDetect" type="color" value="#ff0000">
+        <button id="eyedropper" type="button" class="secondary">Pick from video</button>
+        
+        <label for="colorBackground">Background Color</label>
+        <input id="colorBackground" type="color" value="#000000">
+
+        <label for="colorThreshold">Color Threshold</label>
+        <input id="colorThreshold" type="range" min="0" max="255" value="125">
+
+        <label for="detectionHeight">Detection Height</label>
+        <input id="detectionHeight" type="range" min="0" max="100" value="50">
+
+        <button id="start" class="primary">start</button>
+      </div>
+      
+      
+    </div>
+    <div class="stage">
+        <video id="videoEl" controls crossorigin="anonymous"></video>
+        <img src="./images/pianoLayout.jpg" class="overlay" id="overlay", draggable="false">
+        <div id="detectionHeightBar" class="detectionHeight"></div>
+        
+    </div>
+
+    <script src="pianoLayout.js"></script>
+  <script src="MidiFileBuilder.js"></script>
+  <script src="midiTest.js"></script>
+  <script src="noteReader.js"></script>
+
+</body>
+</html>
