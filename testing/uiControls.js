@@ -13,8 +13,10 @@ const colorDetectInput = document.getElementById('colorDetect')
 const colorBackgroundInput = document.getElementById('colorBackground')
 const colorThresholdInput = document.getElementById('colorThreshold')
 const eyedropperButton = document.getElementById('eyedropper')
+const download = document.getElementById('download')
 let videoFile;
 let noteReader = null;
+let vidReader = null;
 
 // Control elements that should be disabled until video loads
 const videoControls = [
@@ -27,6 +29,16 @@ const videoControls = [
     startBUtton,
     eyedropperButton
 ];
+
+let options = {
+    colorDetect: {r: 0, g: 0, b: 0},
+    colorThreshold: 65,
+    medianKernel: 7,
+    detectionHeight: () => getDetectionHeight(),
+    detectionTime: 5,
+    fps:24,
+    songName: "transcription"
+};
 
 function disableVideoControls() {
     videoControls.forEach(control => {
@@ -68,7 +80,7 @@ fileInput.addEventListener('change', async (e) => {
     
     enableVideoControls(); // Enable controls after video loads
     updateDetectionHeight(); // Set initial position
-    startNoteReader();
+    
 });
 
 setLayoutButton.addEventListener("click", () => {
@@ -79,67 +91,7 @@ startBUtton.addEventListener("click", () => {
     applyOverlay();
 });
 
-// Eyedropper: prefer EyeDropper API, fallback to canvas sampling
-eyedropperButton.addEventListener('click', async () => {
-    // Try native EyeDropper API
-    if (window.EyeDropper) {
-        try {
-            const eye = new window.EyeDropper();
-            const result = await eye.open();
-            if (result && result.sRGBHex) {
-                colorDetectInput.value = result.sRGBHex.toLowerCase();
-            }
-            return;
-        } catch (err) {
-            // If user cancels or API fails, continue to fallback
-        }
-    }
 
-    // Fallback: capture current frame to hidden canvas and let user click a pixel
-    const rect = video.getBoundingClientRect();
-    const overlayDiv = document.createElement('div');
-    overlayDiv.style.position = 'fixed';
-    overlayDiv.style.left = rect.left + 'px';
-    overlayDiv.style.top = rect.top + 'px';
-    overlayDiv.style.width = rect.width + 'px';
-    overlayDiv.style.height = rect.height + 'px';
-    overlayDiv.style.cursor = 'crosshair';
-    overlayDiv.style.zIndex = 9999;
-    overlayDiv.style.background = 'transparent';
-
-    // Snapshot canvas
-    const snapCanvas = document.createElement('canvas');
-    const snapCtx = snapCanvas.getContext('2d');
-    snapCanvas.width = video.videoWidth;
-    snapCanvas.height = video.videoHeight;
-    snapCtx.drawImage(video, 0, 0, snapCanvas.width, snapCanvas.height);
-
-    function handlePick(ev) {
-        ev.preventDefault();
-        const xCss = ev.clientX - rect.left;
-        const yCss = ev.clientY - rect.top;
-        const scaleX = video.videoWidth / rect.width;
-        const scaleY = video.videoHeight / rect.height;
-        const x = Math.floor(xCss * scaleX);
-        const y = Math.floor(yCss * scaleY);
-        const data = snapCtx.getImageData(x, y, 1, 1).data;
-        const hex = rgbToHex(data[0], data[1], data[2]);
-        colorDetectInput.value = hex;
-        cleanup();
-    }
-    function handleCancel(ev){
-        if (ev.key === 'Escape') cleanup();
-    }
-    function cleanup(){
-        overlayDiv.removeEventListener('click', handlePick);
-        document.removeEventListener('keydown', handleCancel);
-        if (overlayDiv.parentNode) overlayDiv.parentNode.removeChild(overlayDiv);
-    }
-
-    overlayDiv.addEventListener('click', handlePick, { once: true });
-    document.addEventListener('keydown', handleCancel, { once: true });
-    document.body.appendChild(overlayDiv);
-});
 
 function rgbToHex(r, g, b) {
     const toHex = (v) => v.toString(16).padStart(2, '0');
@@ -236,12 +188,16 @@ function updateDetectionHeight() {
 function startNoteReader(relKeys) {
     //const keyScale = ["C", "D", "E", "F", "F#", "G", "A", "A#"];
     const keyScale = ['C', "C#", "D#",'F',  "F#", "G#", "A#", "B", "C"];
-    noteReader = new NoteReader(video, relKeys, getDetectionHeight(), keyScale);
-    //remove event listener if it exists
-    video.removeEventListener("timeupdate", noteReader.update);
+    //noteReader = new NoteReader(video, relKeys, getDetectionHeight(), keyScale);
+    if(vidReader)vidReader.disable();
+    vidReader = new readVideoPixel(video,  options, relKeys);
+    //remove event listener if it exists    video.removeEventListener("timeupdate", noteReader.update);
+    /*
+   
     video.addEventListener("timeupdate", () => {
         noteReader.update();
       });
+      */
 }
 
 function globalToVideoCoords(x,y){
@@ -274,3 +230,28 @@ function applyOverlay(){
     startNoteReader(keyArr);
 }
 
+
+//color detection
+colorDetectInput.addEventListener('input', (e) => {
+    const selectedHex = e.target.value; 
+   
+    options.colorDetect = hexToRgb(selectedHex);
+});
+
+/**
+     * Converts hex color to RGB object
+     * @param {string} hex - hex color string (e.g., "#ff0000")
+     * @returns {{r:number, g:number, b:number}}
+     */
+function hexToRgb(hex) {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+      r: parseInt(result[1], 16),
+      g: parseInt(result[2], 16),
+      b: parseInt(result[3], 16)
+    } : { r: 0, g: 0, b: 0 };
+  }
+
+  download.addEventListener("click", () => {
+    vidReader.midiBuilder.download(options.songName +".mid");
+  });
